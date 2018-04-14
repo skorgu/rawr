@@ -27,7 +27,7 @@
 //! let client = RedditClient::new(agent, AnonymousAuthenticator::new());
 //! ```
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::io::Read;
 
 use hyper::client::{Client, RequestBuilder};
@@ -73,6 +73,7 @@ impl RedditClient {
         };
 
         this.get_authenticator()
+            .expect("Authenticator lock poisoned.")
             .login(&this.client, &this.user_agent)
             .expect("Authentication failed. Did you use the correct username/password?");
         this
@@ -104,7 +105,9 @@ impl RedditClient {
         let res = lambda();
         match res {
             Err(APIError::HTTPError(Unauthorized)) => {
-                try!(self.get_authenticator().refresh_token(&self.client, &self.user_agent));
+                try!(self.get_authenticator()
+                    .expect("Authenticator lock poisoned.")
+                    .refresh_token(&self.client, &self.user_agent));
                 lambda()
             }
             _ => res,
@@ -113,8 +116,13 @@ impl RedditClient {
 
     /// Gets a mutable reference to the authenticator using a `&RedditClient`. Mainly used
     /// in the `ensure_authenticated` method to update tokens if necessary.
-    pub fn get_authenticator(&self) -> MutexGuard<Box<Authenticator + Send + 'static>> {
-        self.authenticator.lock().unwrap()
+    pub fn get_authenticator(
+        &self,
+    ) -> Result<
+        MutexGuard<Box<Authenticator + Send + 'static>>,
+        PoisonError<MutexGuard<Box<Authenticator + Send + 'static>>>,
+    > {
+        self.authenticator.lock()
     }
 
     /// Provides an interface to the specified subreddit which can be used to access
@@ -152,7 +160,7 @@ impl RedditClient {
     /// request. The correct user agent header is also sent using this function, which is necessary
     /// to prevent 403 errors.
     pub fn get(&self, dest: &str, oauth_required: bool) -> RequestBuilder {
-        let mut authenticator = self.get_authenticator();
+        let mut authenticator = self.get_authenticator().expect("Authenticator lock poisoned.");
         let url = self.build_url(dest, oauth_required, &mut authenticator);
         let req = self.client.get(&url);
         let mut headers = authenticator.headers();
@@ -182,7 +190,7 @@ impl RedditClient {
     /// request. The correct user agent header is also sent using this function, which is necessary
     /// to prevent 403 errors.
     pub fn post(&self, dest: &str, oauth_required: bool) -> RequestBuilder {
-        let mut authenticator = self.get_authenticator();
+        let mut authenticator = self.get_authenticator().expect("Authenticator lock poisoned.");
         let url = self.build_url(dest, oauth_required, &mut authenticator);
         let req = self.client.post(&url);
         let mut headers = authenticator.headers();
@@ -286,7 +294,8 @@ impl RedditClient {
 impl Drop for RedditClient {
     fn drop(&mut self) {
         if self.auto_logout {
-            self.get_authenticator().logout(&self.client, &self.user_agent).unwrap();
+            let _ = self.get_authenticator().map(|mut auth| 
+                auth.logout(&self.client, &self.user_agent));
         }
     }
 }
