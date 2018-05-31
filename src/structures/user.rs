@@ -90,7 +90,7 @@ impl<'a> User<'a> {
     /// use rawr::prelude::*;
     /// let client = RedditClient::new("rawr", PasswordAuthenticator::new("a", "b", "c", "d"));
     /// let user = client.user("Aurora0001");
-    /// let submissions = user.saved().expect("Could not fetch!");
+    /// let saved = user.saved().expect("Could not fetch!");
     /// let mut i = 0;
     /// for saved_item in saved.take(5) {
     ///     i += 1;
